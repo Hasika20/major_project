@@ -105,10 +105,10 @@ class AdminUIComponents:
             
             st.write("🔄 Creating vector store...")
             
-            # Create file prefix for S3 naming
+            # Create file prefix for local storage naming
             file_prefix = self.pdf_processor._clean_filename_for_s3(original_filename)
             
-            # Check if file already exists
+            # Check if file already exists locally
             self._handle_existing_file_check(file_prefix, request_id, chunks, saved_file_name)
             
         finally:
@@ -131,11 +131,11 @@ class AdminUIComponents:
     
     def _handle_existing_file_check(self, file_prefix: str, request_id: str, chunks: List, saved_file_name: str):
         """Handle checking for existing files and processing."""
-        already_processed, existing_faiss_key, existing_pkl_key = self.s3_manager.check_pdf_already_processed(file_prefix)
+        already_processed, existing_path, _ = self.s3_manager.check_pdf_already_processed(file_prefix)
         
         if already_processed:
-            st.info("⚠️ This file already has a vector store in S3!")
-            st.write(f"📁 Existing files: `{existing_faiss_key}`, `{existing_pkl_key}`")
+            st.info("⚠️ This file already has a vector store saved locally!")
+            st.write(f"📁 Existing path: `{existing_path}`")
             
             overwrite = st.checkbox("Overwrite existing vector store", value=False)
             if not overwrite:
@@ -143,12 +143,10 @@ class AdminUIComponents:
                 return
         
         try:
-            success, faiss_key, pkl_key = self.pdf_processor.create_vector_store(request_id, chunks, file_prefix)
+            success, local_path, _ = self.pdf_processor.create_vector_store(request_id, chunks, file_prefix)
             if success:
                 st.success("✅ Vector store created successfully!")
-                st.write(f"📤 Uploaded to S3:")
-                st.write(f"   - FAISS index: `{faiss_key}`")
-                st.write(f"   - Pickle file: `{pkl_key}`")
+                st.write(f"💾 Saved locally to: `{local_path}`")
             else:
                 st.error("❌ Vector store creation failed")
         except Exception as e:
@@ -163,30 +161,30 @@ class AdminUIComponents:
             skip_existing = st.checkbox(
                 "Skip existing files", 
                 value=True, 
-                help="Skip files that already have vector stores in S3 to avoid duplicates"
+                help="Skip files that already have vector stores saved locally to avoid duplicates"
             )
         
         with col_opt2:
             if skip_existing:
-                st.info("✅ Will check S3 for existing files")
+                st.info("✅ Will check local storage for existing files")
             else:
                 st.warning("⚠️ Will overwrite existing files")
         
         return skip_existing
     
     def _render_s3_status_expander(self):
-        """Render S3 status expander."""
-        with st.expander("📁 View Current S3 Files"):
+        """Render local storage status expander."""
+        with st.expander("📁 View Current Local Storage"):
             try:
                 existing_files = self.s3_manager.get_existing_files()
                 if existing_files:
-                    st.write(f"**Found {len(existing_files)} files in S3 bucket:**")
-                    for file_key in sorted(existing_files):
-                        st.write(f"  • {file_key}")
+                    st.write(f"**Found {len(existing_files)} processed documents locally:**")
+                    for file_name in sorted(existing_files):
+                        st.write(f"  • {file_name}")
                 else:
-                    st.write("No files found in S3 bucket.")
+                    st.write("No processed documents found locally yet.")
             except Exception as e:
-                st.error(f"Error checking S3: {str(e)}")
+                st.error(f"Error checking local storage: {str(e)}")
     
     def _handle_bulk_processing(self, skip_existing: bool):
         """Handle bulk processing execution."""
@@ -233,7 +231,7 @@ class AdminUIComponents:
         1. **Scans** the `pdf-sources` folder for all PDF files
         2. **Processes** each file individually (text extraction → chunking → embeddings)
         3. **Creates** separate FAISS vector stores for each document
-        4. **Uploads** each vector store to S3 with unique naming
+        4. **Saves** each vector store locally with unique naming
         5. **Reports** detailed results for each file
         
         Each document gets its own vector store, allowing for:
@@ -248,20 +246,24 @@ class AdminUIComponents:
             **Processing Parameters:**
             - Chunk Size: {config.chunk_size} characters
             - Chunk Overlap: {config.chunk_overlap} characters
-            - Embedding Model: {config.embedding_model_id}
+            - Embedding Model: {config.embedding_model_name} (FREE - Sentence Transformers)
+            - LLM Model: {config.llm_model_name} (FREE - Ollama)
             - Vector Store: FAISS
-            - Storage: Amazon S3
+            - Storage: Local filesystem (data/vector_stores/)
             
             **File Naming Convention:**
             - Original: `document name.pdf`
-            - S3 Keys: `document_name.faiss` and `document_name.pkl`
+            - Local folder: `document_name/`
+            
+            **💰 Cost: $0/month - Everything runs locally!**
             """)
         
-        # Show current S3 bucket info
+        # Show current storage info
         st.write("---")
-        st.subheader("☁️ S3 Configuration")
-        st.write(f"**Bucket:** `{config.s3_bucket}`")
-        st.write(f"**Region:** `{config.aws_region}`")
+        st.subheader("💾 Local Storage Configuration")
+        st.write(f"**Storage Location:** `{config.vector_store_dir}`")
+        st.write(f"**Data Directory:** `{config.data_dir}`")
+        st.write("**No cloud storage needed!** All files stored on your computer.")
 
 # Global UI components instance
 ui_components = AdminUIComponents()

@@ -1,62 +1,51 @@
 import streamlit as st
-import boto3
 import os
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
-from langchain_community.embeddings import BedrockEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import Bedrock
 
-# Load environment variables
+# Add Admin directory to path to import config
+sys.path.insert(0, str(Path(__file__).parent.parent / "Admin"))
+from config import config
+
+# Load environment variables (though not needed for free version)
 load_dotenv()
 
-# AWS Configuration
-S3_BUCKET = os.getenv('BUCKET_NAME')
-AWS_REGION = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+def get_available_vector_stores():
+    """Get list of processed documents from local storage."""
+    stores = []
+    storage_dir = config.vector_store_dir
+    
+    if not storage_dir.exists():
+        return []
+    
+    for store_dir in storage_dir.iterdir():
+        if store_dir.is_dir():
+            stores.append({
+                'name': store_dir.name,
+                'display_name': store_dir.name.replace("_", " ").title(),
+                'path': str(store_dir)
+            })
+    
+    return sorted(stores, key=lambda x: x['display_name'])
 
-def initialize_bedrock():
-    """Initialize Bedrock client and embeddings"""
+def load_vector_store(store_path):
+    """Load FAISS vector store from local storage."""
     try:
-        bedrock_client = boto3.client(
-            service_name="bedrock-runtime",
-            region_name=AWS_REGION
-        )
-        
-        bedrock_embeddings = BedrockEmbeddings(
-            model_id="amazon.titan-embed-text-v2:0", 
-            client=bedrock_client
-        )
-        
-        # Use cross-region inference profile for Nova Lite
-        # Note: Nova Lite requires the Converse API, so we'll handle it manually in query_documents
-        bedrock_llm = bedrock_client  # We'll use the client directly for Nova Lite
-        
-        return bedrock_embeddings, bedrock_llm
-    except Exception as e:
-        st.error(f"Failed to initialize Bedrock: {str(e)}")
-        return None, None
-
-def load_vector_store():
-    """Load FAISS vector store from S3"""
-    try:
-        s3_client = boto3.client('s3')
-        
-        # Download FAISS files from S3
-        s3_client.download_file(S3_BUCKET, "my_faiss.faiss", "/tmp/my_faiss.faiss")
-        s3_client.download_file(S3_BUCKET, "my_faiss.pkl", "/tmp/my_faiss.pkl")
-        
-        # Load embeddings
-        bedrock_embeddings, _ = initialize_bedrock()
-        if bedrock_embeddings is None:
-            return None
-            
-        # Load vector store
-        vector_store = FAISS.load_local(
-            folder_path="/tmp",
-            index_name="my_faiss",
-            embeddings=bedrock_embeddings,
-            allow_dangerous_deserialization=True
-        )
-        
+        # Try with allow_dangerous_deserialization parameter (for newer versions)
+        try:
+            vector_store = FAISS.load_local(
+                store_path,
+                config.bedrock_embeddings,
+                allow_dangerous_deserialization=True
+            )
+        except TypeError:
+            # Fall back to older version without the parameter
+            vector_store = FAISS.load_local(
+                store_path,
+                config.bedrock_embeddings
+            )
         return vector_store
     except Exception as e:
         st.error(f"Failed to load vector store: {str(e)}")
@@ -134,8 +123,8 @@ def _extract_sources_from_docs(docs):
         })
     return sources
 
-def query_documents(question, vector_store, bedrock_client):
-    """Query the documents using RAG"""
+def query_documents(question, vector_store):
+    """Query the documents using FREE local RAG."""
     try:
         # Search for relevant documents
         docs = vector_store.similarity_search(question, k=3)
@@ -146,69 +135,75 @@ def query_documents(question, vector_store, bedrock_client):
         # Extract source information for later display
         sources = _extract_sources_from_docs(docs)
         
-        # Build safety-guided messages for Nova Lite
-        messages = _build_converse_messages(question, docs)
-
-        # Use Converse API for Nova Lite
-        try:
-            response = bedrock_client.converse(
-                modelId="us.amazon.nova-lite-v1:0",
-                messages=messages,
-                inferenceConfig={
-                    "maxTokens": 512,
-                    "temperature": 0.2
-                }
-            )
-            
-            # Extract the response text
-            if 'output' in response and 'message' in response['output']:
-                answer = response['output']['message']['content'][0]['text']
-                return answer, sources
-            else:
-                return "Unable to generate response from Nova Lite.", []
-                
-        except AttributeError as e:
-            return f"Error: Converse API not available. Please restart the application. Details: {str(e)}", []
-        except Exception as e:
-            # Fallback error message
-            return f"Error with Nova Lite generation: {str(e)}", []
-            
+        # Build context with safety guidelines
+        context_text = _build_context_sections(docs)
+        
+        # Create prompt for FREE local Ollama LLM
+        system_instructions = (
+            "You are a helpful assistant for healthcare insurance documents. "
+            "Follow these rules strictly: \n"
+            "- Ground every answer ONLY in the provided Context sections.\n"
+            "- If the answer is not in context, say you don't know and suggest checking the policy documents.\n"
+            "- Include inline citations using the section IDs like [S1], [S2] wherever specific facts are used.\n"
+            "- Be concise, neutral, and precise. Avoid speculation or fabrication.\n"
+            "- Do not provide legal, medical, or financial advice. Provide informational guidance only.\n"
+            "- Prefer bullet lists for multi-part answers.\n"
+        )
+        
+        prompt = (
+            f"{system_instructions}\n\n"
+            f"Context sections (use for grounding and citations):\n\n"
+            f"{context_text}\n\n"
+            f"Question: {question}\n\n"
+            "Answer with citations like [S1], [S2]. If unknown, say you don't know."
+        )
+        
+        # Generate response using FREE Ollama
+        answer = config.generate_response(prompt, max_tokens=512, temperature=0.2)
+        
+        return answer, sources
+    
     except Exception as e:
         return f"Error querying documents: {str(e)}", []
 
 def main():
-    st.title("Healthcare Insurance RAG Assistant")
+    st.title("🏥 FREE Healthcare Insurance Assistant")
+    st.info("💰 100% Free - Powered by Local AI (Ollama + Sentence Transformers)")
     st.write("Ask questions about healthcare insurance documents")
     
-    # Check if environment is configured
-    if not all([os.getenv('AWS_ACCESS_KEY_ID'), os.getenv('AWS_SECRET_ACCESS_KEY'), os.getenv('BUCKET_NAME')]):
-        st.error("Please configure your AWS credentials and bucket name in the .env file")
+    # Get available documents from local storage
+    stores = get_available_vector_stores()
+    
+    if not stores:
+        st.warning("⚠️ No processed documents found.")
+        st.info("📝 **Next Steps:**\n1. Run the Admin interface: `streamlit run Admin/admin.py --server.port 8501`\n2. Process some PDF files\n3. Come back here to query them!")
         st.stop()
     
-    # Initialize components
-    with st.spinner("Initializing AI components..."):
-        bedrock_embeddings, bedrock_llm = initialize_bedrock()
-        
-        if bedrock_embeddings is None or bedrock_llm is None:
-            st.error("Failed to initialize Bedrock components. Please check your AWS configuration.")
-            st.stop()
+    # Document selection
+    selected_store = st.selectbox(
+        "📚 Select a document to query:",
+        options=stores,
+        format_func=lambda x: x['display_name']
+    )
     
-    # Load vector store
-    with st.spinner("Loading document index..."):
-        vector_store = load_vector_store()
+    # Load vector store (with caching)
+    if 'vector_store' not in st.session_state or st.session_state.get('current_doc') != selected_store['name']:
+        with st.spinner(f"Loading {selected_store['display_name']}..."):
+            st.session_state.vector_store = load_vector_store(selected_store['path'])
+            st.session_state.current_doc = selected_store['name']
         
-        if vector_store is None:
-            st.error("Failed to load document index. Please ensure documents have been processed via the Admin interface.")
+        if st.session_state.vector_store:
+            st.success(f"✅ Loaded: {selected_store['display_name']}")
+        else:
+            st.error("❌ Failed to load document. Please try reprocessing it.")
             st.stop()
-    
-    st.success("✅ System ready! You can now ask questions about healthcare insurance documents.")
     
     # Question input
-    question = st.text_input("Enter your question about healthcare insurance:")
+    question = st.text_input("💬 Enter your question about this document:")
     
-    if st.button("Ask Question") and question:
-        with st.spinner("Searching documents and generating answer..."):
-            answer, sources = query_documents(question, vector_store, bedrock_llm)
+    if st.button("Ask Question", type="primary") and question:
+        with st.spinner("🔍 Searching documents and generating answer..."):
+            answer, sources = query_documents(question, st.session_state.vector_store)
             
             st.subheader("Answer:")
             st.write(answer)
@@ -223,14 +218,26 @@ def main():
                         st.write(f"**Full Reference:** {source['filename']}, Page {source['page']}")
     
     # Example questions
-    with st.expander("Example Questions"):
+    with st.expander("💡 Example Questions"):
         st.write("""
-        - Explain what is the difference between AI/AN limited cost sharing and Zero Cost Sharing coverage?
         - What is a deductible?
         - What services are covered under preventive care?
         - How does copayment work?
         - What is the difference between in-network and out-of-network providers?
         - What are essential health benefits?
+        - Explain the difference between AI/AN limited cost sharing and Zero Cost Sharing coverage
+        """)
+    
+    # System info
+    with st.expander("ℹ️ System Information"):
+        st.write(f"""
+        **FREE Local AI Stack:**
+        - Embeddings: {config.embedding_model_name}
+        - LLM: {config.llm_model_name}
+        - Storage: Local filesystem (data/vector_stores/)
+        - Processed documents: {len(stores)}
+        
+        **No cloud costs!** Everything runs on your computer.
         """)
 
 if __name__ == '__main__':

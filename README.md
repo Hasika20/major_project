@@ -2,41 +2,60 @@
 
 ## Description
 
-An intelligent healthcare insurance document assistant powered by **Amazon Bedrock** and **Retrieval-Augmented Generation (RAG)**. This application allows you to upload complex healthcare insurance PDFs and get instant, accurate answers to your questions using state-of-the-art AI models.
+An intelligent healthcare insurance document assistant powered by **FREE Local AI Models** and **Retrieval-Augmented Generation (RAG)**. This application allows you to upload complex healthcare insurance PDFs and get instant, accurate answers to your questions using state-of-the-art open-source AI - **completely free, no cloud costs!**
 
-**Transform your healthcare insurance documents into an interactive knowledge base!** 🚀
+**Transform your healthcare insurance documents into an interactive knowledge base - at ZERO cost!** 🚀
+
+### 💰 100% FREE - No Cloud Costs!
+
+This project uses:
+
+- ✅ **Sentence Transformers** - Free local embeddings (replaces AWS Titan)
+- ✅ **Ollama + Llama 3.2** - Free local LLM (replaces AWS Nova)
+- ✅ **Local Filesystem** - Free storage (replaces AWS S3)
+
+**Monthly Cost: $0** (everything runs on your computer!)
+
 ## Demo Videos
 
 ### 🔍 Data Query Interface
+
 ![DataQuery](https://github.com/user-attachments/assets/198dc793-28e2-4541-9501-2ba00d27206d)
 
-### 📚 Batch Processing Feature  
+### 📚 Batch Processing Feature
+
 ![BatchProcessing_small](https://github.com/user-attachments/assets/3236d685-f939-4a7e-a6c0-92bfba17697c)
+
 ## ✨ Features
 
 - **📄 Smart PDF Processing**: Upload healthcare insurance documents via intuitive Streamlit interface
-- **🧠 AI-Powered Embeddings**: Generate high-quality embeddings using Amazon Titan Text Embeddings V2
-- **💬 Intelligent Q&A**: Ask natural language questions and get contextual answers using Amazon Nova Lite
-- **☁️ Cloud Storage**: Automatically store FAISS vector indexes in Amazon S3 for scalability
-- **🔄 Cross-Region Support**: Leverage AWS cross-region inference for optimal performance
-- **⚙️ Easy Configuration**: Simple environment variable setup
+- **🧠 FREE AI Embeddings**: Generate high-quality embeddings using Sentence Transformers (no cloud costs!)
+- **💬 Intelligent Q&A**: Ask natural language questions and get contextual answers using Ollama (free local LLM)
+- **💾 Local Storage**: Vector indexes saved to your computer (no S3 costs!)
+- **🔒 Privacy First**: All data stays on your machine - never sent to cloud
+- **⚡ No API Limits**: Unlimited queries, no rate limits, no usage caps
+- **⚙️ Easy Configuration**: Simple one-time setup
 - **🎯 Healthcare Focused**: Optimized for insurance terminology, policies, and procedures
+- **💰 Zero Cost**: 100% free forever!
 
 ## 📋 Prerequisites
 
 - **Python 3.8+**: Modern Python environment
-- **AWS Account**: With access to Amazon Bedrock and S3
-- **S3 Bucket**: For storing FAISS vector indexes
-- **Model Access**: Enable Amazon Titan Text Embeddings V2 and Nova Lite in AWS Bedrock Console
+- **Ollama**: Free local LLM runtime ([Download](https://ollama.com/download))
+- **10GB Disk Space**: For AI models and vector stores
+- **4-8GB RAM**: For running AI models locally
 
-### 🔑 Required AWS Services
-- **Amazon Bedrock**: For AI model inference
-- **Amazon S3**: For document and index storage
-- **IAM Permissions**: For Bedrock and S3 access
+### 🆓 No Cloud Services Needed!
+
+- ❌ No AWS account required
+- ❌ No API keys needed
+- ❌ No credit card required
+- ✅ Everything runs on your computer!
 
 ## 🚀 Quick Start
 
 ### 1. Clone & Setup
+
 ```bash
 git clone <repo-url>
 cd RAG-LLM-Healthcare-Insurance
@@ -49,25 +68,46 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r Admin/requirements.txt
 ```
 
-### 2. Configure AWS Credentials
-Create a `.env` file in the project root:
+### 2. Install Ollama (Free Local LLM)
+
+**Windows:**
+
 ```bash
-AWS_ACCESS_KEY_ID=your_actual_access_key
-AWS_SECRET_ACCESS_KEY=your_actual_secret_key
-AWS_DEFAULT_REGION=us-east-2
-BUCKET_NAME=your_s3_bucket_name
+# Download from: https://ollama.com/download/windows
+# Or use:
+winget install Ollama.Ollama
 ```
 
-### 3. Enable AWS Bedrock Models
-1. Go to **AWS Bedrock Console** → **Model Access**
-2. Request access to:
-   - `Amazon Titan Text Embeddings V2`
-   - `Amazon Nova Lite`
-3. Wait for approval (usually instant)
+**Verify installation:**
+
+```bash
+ollama --version
+```
+
+### 3. Download Free AI Model
+
+```bash
+# Recommended: Llama 3.2 (3B parameters, 2GB)
+ollama pull llama3.2
+
+# Test it works:
+ollama run llama3.2
+# Type "What is health insurance?" and press Ctrl+D to exit
+```
+
+### 4. Optional: Create .env file
+
+Create a `.env` file (optional - not needed for free version):
+
+```bash
+# No AWS credentials needed!
+# File is kept for backwards compatibility only
+```
 
 ## 🎯 Usage
 
 ### Admin Interface - Document Processing
+
 ```bash
 streamlit run Admin/admin.py --server.port 8501
 ```
@@ -75,6 +115,7 @@ streamlit run Admin/admin.py --server.port 8501
 **🌐 Open:** http://localhost:8501
 
 **Features:**
+
 - **📄 Single File Upload**: Upload individual PDF files for processing
 - **📚 Bulk Processing**: Process all PDF files in `pdf-sources` folder automatically
 - Automatic text extraction and chunking
@@ -83,6 +124,7 @@ streamlit run Admin/admin.py --server.port 8501
 - Real-time progress tracking and detailed results
 
 ### User Interface - Interactive Q&A
+
 ```bash
 streamlit run User/app.py --server.port 8502
 ```
@@ -90,6 +132,7 @@ streamlit run User/app.py --server.port 8502
 **🌐 Open:** http://localhost:8502
 
 **Features:**
+
 - Ask natural language questions
 - Get AI-powered answers from your documents
 - Context-aware responses using Nova Lite
@@ -98,7 +141,9 @@ streamlit run User/app.py --server.port 8502
 ## 🧪 Testing Your Setup
 
 ### Complete Test Suite
+
 Run all tests to verify your system is working correctly:
+
 ```bash
 # Run all tests
 ./run_tests.sh
@@ -107,7 +152,9 @@ python3 run_tests.py
 ```
 
 ### Individual Tests
+
 Test specific components:
+
 ```bash
 # AWS connectivity
 python3 tests/test_s3_connection.py
@@ -120,8 +167,9 @@ python3 tests/test_complete_system.py
 ```
 
 ### Step-by-Step Testing
+
 1. **Upload Documents**: Use sample PDFs in `pdf-sources/` folder
-2. **Verify Processing**: Check for "Vector store created successfully" message  
+2. **Verify Processing**: Check for "Vector store created successfully" message
 3. **Test Queries**: Ask questions like:
    - "What is a deductible?"
    - "What services are covered under preventive care?"
@@ -129,6 +177,7 @@ python3 tests/test_complete_system.py
 4. **Check S3**: Verify vector store files uploaded to S3
 
 ### 📚 Bulk Processing Feature
+
 Process all PDF files at once using the admin interface:
 
 1. **Open Admin Interface**: http://localhost:8501
@@ -139,6 +188,7 @@ Process all PDF files at once using the admin interface:
 6. **Review results** with detailed processing statistics
 
 **Alternative: Command Line Demo**
+
 ```bash
 python3 demo_bulk_processing.py
 ```
@@ -184,6 +234,7 @@ RAG-LLM-Healthcare-Insurance/
 ## 🔧 Technical Architecture
 
 ### 🏗️ Modular Design (v2.0)
+
 The application follows a clean, modular architecture with separation of concerns:
 
 - **Configuration Layer** (`config.py`): Centralized AWS client management
@@ -194,21 +245,37 @@ The application follows a clean, modular architecture with separation of concern
 - **Compatibility Layer** (`compatibility.py`): Backward compatibility support
 
 ### AI Models Used
-- **Amazon Titan Text Embeddings V2** (`amazon.titan-embed-text-v2:0`)
-  - Generates 1024-dimensional embeddings
-  - Optimized for document search and retrieval
-  
-- **Amazon Nova Lite** (`us.amazon.nova-lite-v1:0`)
-  - Cross-region inference for optimal performance
-  - Natural language generation for question answering
+
+- **Sentence Transformers (all-MiniLM-L6-v2)** - FREE local embeddings
+  - Generates 384-dimensional embeddings
+  - 80MB model size
+  - Optimized for semantic search
+- **Ollama + Llama 3.2** - FREE local LLM
+  - 3B parameter model (2GB)
+  - Fast inference on CPU
+  - Natural language generation for Q&A
+  - Alternatives: Mistral (7B), Phi-3 (3.8B)
 
 ### Key Technologies
+
 - **Streamlit**: Interactive web interfaces
 - **LangChain**: Document processing and RAG pipeline
 - **FAISS**: Vector similarity search
-- **Amazon S3**: Cloud storage for indexes
-- **Amazon Bedrock**: AI model inference
+- **Sentence Transformers**: FREE local embeddings
+- **Ollama**: FREE local LLM runtime
+- **Local Filesystem**: FREE storage (replaces S3)
 - **Modular Python Architecture**: Clean separation of concerns
+
+### 💰 Cost Comparison
+
+| Feature        | AWS (Cloud)        | This Project (Local) |
+| -------------- | ------------------ | -------------------- |
+| Embeddings     | $0.0001/1K tokens  | **FREE**             |
+| LLM Inference  | $0.0006/1K tokens  | **FREE**             |
+| Storage        | $0.023/GB/month    | **FREE**             |
+| API Limits     | Yes                | **No limits!**       |
+| Privacy        | Data sent to cloud | **100% private**     |
+| **Total Cost** | **$5-20/month**    | **$0/month**         |
 
 ## 🤝 Contributing
 
@@ -226,24 +293,35 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ### Common Issues
 
-**❌ "AccessDeniedException" Error**
-- Solution: Enable model access in AWS Bedrock Console
-- Go to Bedrock → Model Access → Request access to Titan V2 and Nova Lite
+**❌ "Ollama not found" Error**
 
-**❌ "ValidationException" Error**  
-- Solution: Check your AWS region configuration
-- Ensure models are available in your selected region
+- Solution: Restart terminal after Ollama installation
+- Or manually add to PATH: `C:\Users\<username>\AppData\Local\Programs\Ollama`
 
-**❌ "ConversationNotFound" Error**
-- Solution: Restart Streamlit interfaces after boto3 updates
-- Run: `pip install --upgrade boto3`
+**❌ "Model not found" Error**
+
+- Solution: Download the model
+- Run: `ollama pull llama3.2`
+- Check installed models: `ollama list`
+
+**❌ Slow Response Times**
+
+- Solution: Use smaller model (llama3.2 instead of mistral)
+- Close other applications to free up RAM
+- First-time model load takes longer (subsequent runs faster)
+
+**❌ "Failed to load embedding model"**
+
+- Solution: Check internet connection (needed for first-time download only)
+- The 80MB model will download automatically on first run
+- After download, works offline!
 
 ### Get Help
-- Run the test suite: `./run_tests.sh` or `python3 run_tests.py`
+
+- **Setup Guide**: See [FREE_SETUP_GUIDE.md](FREE_SETUP_GUIDE.md) for detailed instructions
+- Run the test suite: `./run_tests.sh` or `python3 run_tests.py` (tests updated for free version)
 - Check individual test outputs in the `tests/` directory
-- Review AWS CloudWatch logs for detailed error messages
-- Ensure your `.env` file has correct credentials
 
 ---
 
-**Built with ❤️ for healthcare insurance professionals**
+**Built with ❤️ for healthcare insurance professionals - Now 100% FREE!** 💰✨

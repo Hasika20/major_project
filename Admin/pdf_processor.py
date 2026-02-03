@@ -56,47 +56,29 @@ class PDFProcessor:
     
     def create_vector_store(self, request_id: str, chunks: List, file_prefix: str = "my_faiss") -> Tuple[bool, str, str]:
         """
-        Create vector store and upload to S3.
+        Create vector store and save to local filesystem (FREE VERSION).
         
         Args:
             request_id (str): Unique request identifier
             chunks (List): Text chunks to vectorize
-            file_prefix (str): Prefix for S3 file naming
+            file_prefix (str): Prefix for local folder naming
             
         Returns:
-            Tuple[bool, str, str]: (success, faiss_key, pkl_key)
+            Tuple[bool, str, str]: (success, local_path, local_path)
         """
         try:
-            # Create FAISS vector store
+            # Create FAISS vector store with FREE embeddings
             vector_store_faiss = FAISS.from_documents(chunks, self.bedrock_embeddings)
             
-            # Save to local temporary directory
-            file_name = f"{request_id}.bin"
-            folder_path = "/tmp/"
-            vector_store_faiss.save_local(index_name=file_name, folder_path=folder_path)
+            # Save to local data directory (replaces S3)
+            save_path = config.vector_store_dir / file_prefix
+            save_path.mkdir(exist_ok=True)
             
-            # Define S3 keys
-            s3_faiss_key = f"{file_prefix}.faiss"
-            s3_pkl_key = f"{file_prefix}.pkl"
+            # Save vector store
+            vector_store_faiss.save_local(str(save_path))
             
-            # Upload to S3
-            local_faiss_path = folder_path + file_name + '.faiss'
-            local_pkl_path = folder_path + file_name + '.pkl'
-            
-            upload_success = s3_manager.upload_vector_store(
-                local_faiss_path, local_pkl_path, s3_faiss_key, s3_pkl_key
-            )
-            
-            # Clean up local files
-            try:
-                if os.path.exists(local_faiss_path):
-                    os.remove(local_faiss_path)
-                if os.path.exists(local_pkl_path):
-                    os.remove(local_pkl_path)
-            except Exception:
-                pass  # Ignore cleanup errors
-            
-            return upload_success, s3_faiss_key, s3_pkl_key
+            local_path = str(save_path)
+            return True, local_path, local_path
             
         except Exception as e:
             raise Exception(f"Error creating vector store: {str(e)}")
@@ -153,7 +135,7 @@ class PDFProcessor:
             if success:
                 if progress_callback:
                     progress_callback(f"✅ Vector store created for {original_filename}")
-                    progress_callback(f"📤 Uploaded to S3: {faiss_key} and {pkl_key}")
+                    progress_callback(f"� Saved locally to: {faiss_key}")
                 return True, original_filename, len(pages), len(chunks), faiss_key, pkl_key, "processed"
             else:
                 if progress_callback:

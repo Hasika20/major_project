@@ -1,15 +1,13 @@
 """
-Refactored Admin Interface for Healthcare Insurance PDF Processing System.
+FREE Admin Interface for Healthcare Insurance PDF Processing System.
 
-This is the main entry point for the admin interface, using a modular architecture
-with clear separation of concerns.
+100% FREE VERSION - No cloud costs!
+Uses local AI models and storage.
 
-Modules:
-- config: Configuration and AWS client management
-- s3_operations: S3 file operations
-- pdf_processor: PDF processing and vector store creation
-- bulk_processor: Bulk processing coordination
-- ui_components: Streamlit UI components
+Features:
+- Free sentence-transformers embeddings (no AWS Bedrock)
+- Local Ollama LLM (no API costs)
+- Local filesystem storage (no S3 costs)
 """
 
 import streamlit as st
@@ -22,8 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ui_components import ui_components
 
 def main():
-    """Main function for the admin interface."""
-    st.title("🏥 Healthcare Insurance PDF Processing System")
+    """Main function for the FREE admin interface."""
+    st.title("🏥 FREE Healthcare Insurance PDF Processor")
+    st.info("💰 100% Free - No cloud costs! Uses local AI models.")
     st.write("Process healthcare insurance documents to create searchable vector stores.")
     
     # Create tabs for different processing options

@@ -80,6 +80,7 @@ class BulkProcessor:
         log_messages = []
         # Generate unique session ID for this processing session
         session_id = str(uuid.uuid4())[:8]
+        update_counter = [0]  # Use list to allow modification in nested function
         
         def update_progress(message: str):
             """Update progress display and log."""
@@ -90,8 +91,9 @@ class BulkProcessor:
                 log_messages.pop(0)
             
             # Update scrollable log with latest messages
-            # Use timestamp + session to ensure unique keys
-            unique_key = f"log_area_{session_id}_{int(time.time() * 1000) % 10000}"
+            # Use counter to ensure truly unique keys
+            update_counter[0] += 1
+            unique_key = f"log_area_{session_id}_{update_counter[0]}"
             with log_placeholder.container():
                 st.text_area(
                     "Real-time Processing Updates", 
