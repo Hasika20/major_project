@@ -16,12 +16,12 @@ Usage:
     python benchmark_rag.py
 """
 
-import sys, re, time
+import sys, re, time, csv, os
 from pathlib import Path
 import numpy as np
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-GEMINI_API_KEY  = "AIzaSyAsF03bTrAb90KOk5XuzDM0Min3qFJcBK8"   # <-- paste your key here
+GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "AIzaSyAsF03bTrAb90KOk5XuzDM0Min3qFJcBK8")
 GEMINI_MODEL    = "gemini-1.5-flash"
 OLLAMA_MODEL    = "llama3.2"
 TOP_K_CHUNKS    = 3
@@ -35,6 +35,20 @@ TEST_QUESTIONS = [
     "What is an out-of-pocket maximum?",
     "How does the network of providers affect my costs?",
 ]
+# Eligibility benchmark prompts (expense + bills). Uses RAG context from policy.
+ELIGIBILITY_PROMPTS = [
+    "Check if this claim is likely covered based on the policy.",
+    "Evaluate eligibility for the following bill items against the policy.",
+]
+# Summary/recommendation prompts (policy-only)
+SUMMARY_PROMPT = (
+    "Create a structured summary of the policy with sections: Coverage, Exclusions, "
+    "Waiting Periods, Limits, Eligibility, Claims Process."
+)
+RECOMMEND_PROMPT = (
+    "Provide 3-5 recommendations for a 35-year-old with a moderate budget and "
+    "focus on preventive and specialist care."
+)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # config.py lives at the project root — no extra path manipulation needed
@@ -149,6 +163,37 @@ def plain_prompt(question: str) -> str:
         f"Question: {question}\n\nAnswer:"
     )
 
+def eligibility_prompt(expense_desc: str, bill_text: str, context: str) -> str:
+    return (
+        "You are a healthcare insurance assistant. Use ONLY the policy context to decide eligibility. "
+        "Return one of: Likely covered, Possibly covered, Unclear, Likely not covered. "
+        "Cite policy clauses as [S1], [S2].\n\n"
+        f"Policy Context:\n{context}\n\n"
+        f"Expense Description:\n{expense_desc}\n\n"
+        f"Bill Text:\n{bill_text}\n\n"
+        "Answer format:\n"
+        "- Decision: <Likely covered | Possibly covered | Unclear | Likely not covered>\n"
+        "- Rationale: <2-4 concise bullets with citations>\n"
+    )
+
+def summary_prompt(context: str) -> str:
+    return (
+        "You are a healthcare insurance assistant. Create a structured summary using ONLY the context. "
+        "Cite as [S1], [S2].\n\n"
+        f"Context:\n{context}\n\n"
+        "Summary sections:\n"
+        "1) Coverage\n2) Exclusions\n3) Waiting Periods\n4) Limits\n5) Eligibility\n6) Claims Process\n"
+    )
+
+def recommendations_prompt(context: str) -> str:
+    return (
+        "You are a healthcare insurance assistant. Provide 3-5 recommendations using ONLY the context. "
+        "Cite as [S1], [S2].\n\n"
+        f"Context:\n{context}\n\n"
+        "User Profile: Age 35, moderate budget, wants preventive and specialist care.\n"
+        "Recommendations:"
+    )
+
 
 # ── Model callers ─────────────────────────────────────────────────────────────
 def call_ollama(prompt: str):
@@ -186,6 +231,41 @@ def pick_store():
                 return stores[c - 1]
         except ValueError:
             pass
+
+def pick_bills_dir(default_dir: Path) -> Path:
+    if default_dir.exists():
+        return default_dir
+    print("\n📁 Enter bills directory path (or leave blank to skip eligibility):")
+    user_input = input("Bills dir: ").strip()
+    if not user_input:
+        return None
+    path = Path(user_input)
+    return path if path.exists() else None
+
+def load_bill_sets(bills_dir: Path):
+    if bills_dir is None:
+        return []
+    from langchain_community.document_loaders import PyPDFLoader
+    bill_sets = []
+    for hospital_dir in sorted([d for d in bills_dir.iterdir() if d.is_dir()]):
+        for set_idx in [1, 2, 3]:
+            files = [
+                hospital_dir / f"Set{set_idx}_Hospital_Bill.pdf",
+                hospital_dir / f"Set{set_idx}_Pharmacy_Bill.pdf",
+                hospital_dir / f"Set{set_idx}_Lab_Bill.pdf",
+            ]
+            if not all(f.exists() for f in files):
+                continue
+            parts = []
+            for f in files:
+                pages = PyPDFLoader(str(f)).load()
+                parts.append("\n".join(p.page_content for p in pages if p.page_content))
+            bill_text = "\n\n".join(parts)
+            bill_sets.append({
+                "name": f"{hospital_dir.name}-Set{set_idx}",
+                "text": bill_text,
+            })
+    return bill_sets
 
 
 # ── Results table ─────────────────────────────────────────────────────────────
@@ -286,10 +366,19 @@ def main():
     vector_store = load_vector_store(store_path)
     print("✅ Ready.\n")
 
+    bills_dir = pick_bills_dir(Path(r"D:\Major Project\synthea\output\bills"))
+    bill_sets = load_bill_sets(bills_dir) if bills_dir else []
+    if bill_sets:
+        bill_sets = bill_sets[:1]
+
     print("─" * 60)
-    print(f"  Running {len(TEST_QUESTIONS)} test questions...")
+    print(f"  Running {len(TEST_QUESTIONS)} policy Q&A questions...")
     print(f"  {'Ollama model':20}: {OLLAMA_MODEL} + RAG")
     print(f"  {'Gemini model':20}: {GEMINI_MODEL} (no RAG — general knowledge only)")
+    if bill_sets:
+        print(f"  Eligibility cases: {len(bill_sets)} bill set")
+    else:
+        print("  Eligibility cases: 0 (no bills directory provided)")
     print("─" * 60)
 
     results = []
@@ -318,6 +407,7 @@ def main():
 
         # ── Compute metrics ──
         results.append({
+            "task": "policy_qa",
             "question":    question,
             "ollama_faith": faithfulness_score(ollama_answer, context),
             "ollama_hallu": hallucination_risk(ollama_answer, context),
@@ -331,9 +421,105 @@ def main():
             "gemini_time":  gemini_time,
         })
 
+    # ── Eligibility benchmark ──
+    for idx, bill in enumerate(bill_sets, 1):
+        print(f"\n[Eligibility {idx}/{len(bill_sets)}] {bill['name']}")
+        expense_desc = ELIGIBILITY_PROMPTS[idx % len(ELIGIBILITY_PROMPTS)]
+        context = retrieve_context(vector_store, expense_desc)
+
+        print("  ⏳ Ollama + RAG ...", end="", flush=True)
+        try:
+            ollama_answer, ollama_time = call_ollama(eligibility_prompt(expense_desc, bill["text"], context))
+        except Exception as e:
+            ollama_answer, ollama_time = f"ERROR: {e}", 0.0
+        print(f" done ({ollama_time:.1f}s)")
+
+        print("  ⏳ Gemini (no RAG) ...", end="", flush=True)
+        try:
+            gemini_answer, gemini_time = call_gemini(eligibility_prompt(expense_desc, bill["text"], context))
+        except Exception as e:
+            gemini_answer, gemini_time = f"ERROR: {e}", 0.0
+        print(f" done ({gemini_time:.1f}s)")
+
+        results.append({
+            "task": "eligibility",
+            "question": bill["name"],
+            "ollama_faith": faithfulness_score(ollama_answer, context),
+            "ollama_hallu": hallucination_risk(ollama_answer, context),
+            "ollama_relev": answer_relevancy(ollama_answer, expense_desc),
+            "ollama_cite": citation_rate(ollama_answer),
+            "ollama_time": ollama_time,
+            "gemini_faith": faithfulness_score(gemini_answer, context),
+            "gemini_hallu": hallucination_risk(gemini_answer, context),
+            "gemini_relev": answer_relevancy(gemini_answer, expense_desc),
+            "gemini_cite": citation_rate(gemini_answer),
+            "gemini_time": gemini_time,
+        })
+
+    # ── Summary + Recommendations benchmark ──
+    for task_name, prompt_builder in [
+        ("summary", summary_prompt),
+        ("recommendations", recommendations_prompt),
+    ]:
+        print(f"\n[{task_name.title()}] Generating output")
+        context = retrieve_context(vector_store, SUMMARY_PROMPT)
+
+        print("  ⏳ Ollama + RAG ...", end="", flush=True)
+        try:
+            ollama_answer, ollama_time = call_ollama(prompt_builder(context))
+        except Exception as e:
+            ollama_answer, ollama_time = f"ERROR: {e}", 0.0
+        print(f" done ({ollama_time:.1f}s)")
+
+        print("  ⏳ Gemini (no RAG) ...", end="", flush=True)
+        try:
+            gemini_answer, gemini_time = call_gemini(prompt_builder(context))
+        except Exception as e:
+            gemini_answer, gemini_time = f"ERROR: {e}", 0.0
+        print(f" done ({gemini_time:.1f}s)")
+
+        results.append({
+            "task": task_name,
+            "question": task_name,
+            "ollama_faith": faithfulness_score(ollama_answer, context),
+            "ollama_hallu": hallucination_risk(ollama_answer, context),
+            "ollama_relev": answer_relevancy(ollama_answer, task_name),
+            "ollama_cite": citation_rate(ollama_answer),
+            "ollama_time": ollama_time,
+            "gemini_faith": faithfulness_score(gemini_answer, context),
+            "gemini_hallu": hallucination_risk(gemini_answer, context),
+            "gemini_relev": answer_relevancy(gemini_answer, task_name),
+            "gemini_cite": citation_rate(gemini_answer),
+            "gemini_time": gemini_time,
+        })
+
     # ── Print results ──
     print_per_question(results)
     print_metrics_table(results)
+
+    # ── Write CSV report ──
+    report_path = Path("benchmark_results.csv")
+    with report_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "task",
+                "question",
+                "ollama_faith",
+                "ollama_hallu",
+                "ollama_relev",
+                "ollama_cite",
+                "ollama_time",
+                "gemini_faith",
+                "gemini_hallu",
+                "gemini_relev",
+                "gemini_cite",
+                "gemini_time",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"  📄 CSV report written to {report_path}")
 
     # ── Key insights ──
     import numpy as np

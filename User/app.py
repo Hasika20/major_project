@@ -569,43 +569,27 @@ def main():
 
         with tabs[2]:
             st.markdown('<div class="section-title">Claim Eligibility Check</div>', unsafe_allow_html=True)
-            claim_type = st.selectbox(
-                "Claim type",
-                [
-                    "Hospitalization",
-                    "Day care",
-                    "Outpatient",
-                    "Emergency",
-                    "Maternity",
-                    "Dental",
-                    "Vision",
-                    "Other",
-                ],
-            )
             expense_desc = st.text_area("Expense description", placeholder="Describe the treatment or expense")
-            provider_network = st.radio("Provider network", ["In-network", "Out-of-network", "Unknown"], horizontal=True)
-            service_date = st.text_input("Service date (optional)", placeholder="YYYY-MM-DD")
-            policy_start = st.text_input("Policy start date (optional)", placeholder="YYYY-MM-DD")
-            bill_text = st.text_area("Optional bill text", placeholder="Paste bill text if available")
-            bill_pdf = st.file_uploader("Optional bill PDF", type=["pdf"], key="bill_pdf")
+            bill_pdfs = st.file_uploader(
+                "Upload bill PDFs",
+                type=["pdf"],
+                accept_multiple_files=True,
+                key="bill_pdfs",
+            )
 
             eligibility_button = st.button("Check Eligibility", type="primary", use_container_width=True)
             if eligibility_button:
-                extracted_bill_text = bill_text
-                if bill_pdf is not None:
+                extracted_chunks = []
+                for bill_pdf in bill_pdfs or []:
                     extracted_text, error = _extract_text_from_uploaded_pdf(bill_pdf)
                     if error:
-                        st.error(f"Failed to read bill PDF: {error}")
+                        st.error(f"Failed to read {bill_pdf.name}: {error}")
                     else:
-                        extracted_bill_text = (extracted_bill_text + "\n" + extracted_text).strip()
+                        extracted_chunks.append(extracted_text)
 
-                claim_details = (
-                    f"Claim type: {claim_type}\n"
-                    f"Expense description: {expense_desc or 'Not provided'}\n"
-                    f"Provider network: {provider_network}\n"
-                    f"Service date: {service_date or 'Not provided'}\n"
-                    f"Policy start date: {policy_start or 'Not provided'}"
-                )
+                extracted_bill_text = "\n".join(chunk for chunk in extracted_chunks if chunk)
+
+                claim_details = f"Expense description: {expense_desc or 'Not provided'}"
 
                 with st.spinner("Evaluating eligibility against policy clauses..."):
                     decision, sources = _evaluate_claim_eligibility(
