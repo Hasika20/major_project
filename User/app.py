@@ -87,6 +87,46 @@ def _create_vector_store_from_upload(uploaded_file):
             os.remove(temp_path)
 
 
+def _extract_text_from_uploaded_pdf(uploaded_file):
+    """Extract raw text from an uploaded PDF file."""
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(uploaded_file.getvalue())
+            temp_path = tmp.name
+
+        loader = PyPDFLoader(temp_path)
+        pages = loader.load()
+        text = "\n".join(p.page_content for p in pages if p.page_content)
+        return text, None
+    except Exception as exc:
+        return "", str(exc)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def _merge_unique_docs(docs_list):
+    """Merge lists of docs while keeping unique page content."""
+    seen = set()
+    merged = []
+    for docs in docs_list:
+        for doc in docs:
+            content = (doc.page_content or "").strip()
+            if not content:
+                continue
+            key = (content, doc.metadata.get("page"), doc.metadata.get("source"))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(doc)
+    return merged
+
+
+def _retrieve_context_docs(vector_store, query, k=4):
+    return vector_store.similarity_search(query, k=k)
+
+
 def _query_uploaded_document(question, vector_store):
     """Query uploaded PDF via RAG and return answer with sources."""
     try:
@@ -113,6 +153,100 @@ def _query_uploaded_document(question, vector_store):
         return answer, sources
     except Exception as exc:
         return f"Error querying document: {str(exc)}", []
+
+
+def _generate_policy_summary(vector_store):
+    """Generate a structured policy summary with citations."""
+    section_queries = [
+        "coverage benefits included",
+        "exclusions not covered",
+        "waiting period and pre-existing conditions",
+        "limits sub-limits caps room rent",
+        "eligibility age family composition",
+        "claim process reimbursement cashless",
+        "definitions key terms",
+    ]
+
+    docs_list = [_retrieve_context_docs(vector_store, q, k=4) for q in section_queries]
+    docs = _merge_unique_docs(docs_list)
+    if not docs:
+        return "No relevant content was found in the uploaded PDF.", []
+
+    context_text = _build_context_sections(docs)
+    prompt = (
+        "You are a healthcare insurance document assistant. "
+        "Create a structured summary using ONLY the provided context. "
+        "For each section, include citations like [S1], [S2]. "
+        "If a section is not found, say 'Not found in this document.'\n\n"
+        "Sections to produce:\n"
+        "1) Coverage Overview\n"
+        "2) Key Benefits\n"
+        "3) Exclusions\n"
+        "4) Waiting Periods\n"
+        "5) Limits and Sub-limits\n"
+        "6) Eligibility\n"
+        "7) Claims Process\n"
+        "8) Key Definitions\n\n"
+        f"Context:\n{context_text}\n\n"
+        "Summary:"
+    )
+
+    answer = config.generate_response(prompt, max_tokens=700, temperature=0.2)
+    sources = _extract_sources_from_docs(docs)
+    return answer, sources
+
+
+def _evaluate_claim_eligibility(vector_store, claim_details, bill_text):
+    """Evaluate claim eligibility from policy clauses with citations."""
+    retrieval_query = f"claim coverage {claim_details} exclusions waiting period limits"
+    docs = _retrieve_context_docs(vector_store, retrieval_query, k=5)
+    if not docs:
+        return "No relevant policy content was found for eligibility evaluation.", []
+
+    context_text = _build_context_sections(docs)
+    bill_section = bill_text.strip()[:3000] if bill_text else "(No bill text provided)"
+
+    prompt = (
+        "You are a healthcare insurance document assistant. "
+        "Use ONLY the policy context to decide eligibility. "
+        "Return one of: Likely covered, Possibly covered, Unclear, Likely not covered. "
+        "Cite policy clauses for every key statement. "
+        "If evidence is weak, choose 'Unclear'.\n\n"
+        f"Policy Context:\n{context_text}\n\n"
+        f"Claim Details:\n{claim_details}\n\n"
+        f"Bill/Expense Text (if any):\n{bill_section}\n\n"
+        "Answer format:\n"
+        "- Decision: <Likely covered | Possibly covered | Unclear | Likely not covered>\n"
+        "- Rationale: <2-4 concise bullets with citations>\n"
+        "- Missing Info: <what else is needed, if any>\n"
+    )
+
+    answer = config.generate_response(prompt, max_tokens=600, temperature=0.2)
+    sources = _extract_sources_from_docs(docs)
+    return answer, sources
+
+
+def _generate_recommendations(vector_store, profile_text):
+    """Generate personalized recommendations grounded in the policy."""
+    docs = _retrieve_context_docs(vector_store, profile_text, k=5)
+    if not docs:
+        return "No relevant policy content was found for recommendations.", []
+
+    context_text = _build_context_sections(docs)
+    prompt = (
+        "You are a healthcare insurance document assistant. "
+        "Generate personalized recommendations using ONLY the policy context. "
+        "Each recommendation must include a citation. "
+        "If a relevant benefit is not found, say so.\n\n"
+        f"Policy Context:\n{context_text}\n\n"
+        f"User Profile:\n{profile_text}\n\n"
+        "Provide 3-6 recommendations in this format:\n"
+        "1) Recommendation - why it matters [S#]\n"
+    )
+
+    answer = config.generate_response(prompt, max_tokens=600, temperature=0.2)
+    sources = _extract_sources_from_docs(docs)
+    return answer, sources
 
 def main():
     # Bold, editorial-style CSS styling
@@ -302,6 +436,16 @@ def main():
             border: 1px solid rgba(129, 178, 154, 0.6);
         }
 
+        .disclaimer {
+            background: #fff3e6;
+            border: 1px solid rgba(224, 122, 95, 0.35);
+            color: #5a3b2e;
+            padding: 0.9rem 1.1rem;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            margin: 1.2rem 0 1.6rem 0;
+        }
+
         @keyframes rise {
             from { transform: translateY(12px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
@@ -332,6 +476,14 @@ def main():
             </p>
         </div>
     """, unsafe_allow_html=True)
+
+    st.markdown(
+        "<div class='disclaimer'>"
+        "For informational purposes only. This is not medical, legal, or financial advice. "
+        "Always confirm with your insurer or a qualified professional."
+        "</div>",
+        unsafe_allow_html=True,
+    )
     
     # Upload and question input in single card
     st.markdown('<div class="content-card">', unsafe_allow_html=True)
@@ -351,7 +503,6 @@ def main():
     if upload_signature and st.session_state.get("upload_signature") != upload_signature:
         with st.spinner(f"Processing {uploaded_file.name}..."):
             vector_store, pages, chunks, error = _create_vector_store_from_upload(uploaded_file)
-
         if error:
             st.error(f"Failed to process PDF: {error}")
             st.session_state.pop("vector_store", None)
@@ -360,46 +511,167 @@ def main():
             st.session_state["vector_store"] = vector_store
             st.session_state["upload_signature"] = upload_signature
             st.success(f"Ready: {uploaded_file.name} ({pages} pages, {chunks} chunks)")
-    
-    # Add divider
-    st.markdown('<div style="margin: 1.5rem 0; border-top: 1px solid #e9ecef;"></div>', unsafe_allow_html=True)
-    
-    question = ""
-    ask_button = False
+
     if "vector_store" in st.session_state:
-        # Question input section
-        st.markdown('<div class="section-title">Ask Your Question</div>', unsafe_allow_html=True)
-        question = st.text_input(
-            "Enter your question about the uploaded document",
-            placeholder="e.g., What services are covered under preventive care?",
-            label_visibility="collapsed"
-        )
-        
-        ask_button = st.button("Get Answer", type="primary", use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+        tabs = st.tabs(["Ask", "Summary", "Eligibility", "Recommendations"])
 
-    if ask_button and question:
+        with tabs[0]:
+            st.markdown('<div class="section-title">Ask Your Question</div>', unsafe_allow_html=True)
+            question = st.text_input(
+                "Enter your question about the uploaded document",
+                placeholder="e.g., What services are covered under preventive care?",
+                label_visibility="collapsed"
+            )
+            ask_button = st.button("Get Answer", type="primary", use_container_width=True)
 
-        with st.spinner("Analyzing documents and generating response..."):
-            answer, sources = _query_uploaded_document(question, st.session_state["vector_store"])
-            
-            # Display answer
-            st.markdown('<div class="content-card">', unsafe_allow_html=True)
-            st.markdown('<div class="section-title">Answer</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="answer-container"><div class="answer-text">{answer}</div></div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Display sources
-            if sources:
+            if ask_button and question:
+                with st.spinner("Analyzing documents and generating response..."):
+                    answer, sources = _query_uploaded_document(question, st.session_state["vector_store"])
+
                 st.markdown('<div class="content-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Source References</div>', unsafe_allow_html=True)
-                for source in sources:
-                    with st.expander(f"{source['id']}: {source['filename']} - Page {source['page']}", expanded=False):
-                        st.markdown("**Document Excerpt:**")
-                        st.write(f"_{source['content_preview']}_")
-                        st.markdown("---")
-                        st.markdown(f"**Reference:** {source['filename']}, Page {source['page']}")
+                st.markdown('<div class="section-title">Answer</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="answer-container"><div class="answer-text">{answer}</div></div>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
+
+                if sources:
+                    st.markdown('<div class="content-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Source References</div>', unsafe_allow_html=True)
+                    for source in sources:
+                        with st.expander(f"{source['id']}: {source['filename']} - Page {source['page']}", expanded=False):
+                            st.markdown("**Document Excerpt:**")
+                            st.write(f"_{source['content_preview']}_")
+                            st.markdown("---")
+                            st.markdown(f"**Reference:** {source['filename']}, Page {source['page']}")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+        with tabs[1]:
+            st.markdown('<div class="section-title">Policy Summary</div>', unsafe_allow_html=True)
+            summary_button = st.button("Generate Summary", type="primary", use_container_width=True)
+            if summary_button:
+                with st.spinner("Creating summary from the policy..."):
+                    summary, sources = _generate_policy_summary(st.session_state["vector_store"])
+
+                st.markdown('<div class="content-card">', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Summary</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="answer-container"><div class="answer-text">{summary}</div></div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                if sources:
+                    st.markdown('<div class="content-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Source References</div>', unsafe_allow_html=True)
+                    for source in sources:
+                        with st.expander(f"{source['id']}: {source['filename']} - Page {source['page']}", expanded=False):
+                            st.markdown("**Document Excerpt:**")
+                            st.write(f"_{source['content_preview']}_")
+                            st.markdown("---")
+                            st.markdown(f"**Reference:** {source['filename']}, Page {source['page']}")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+        with tabs[2]:
+            st.markdown('<div class="section-title">Claim Eligibility Check</div>', unsafe_allow_html=True)
+            claim_type = st.selectbox(
+                "Claim type",
+                [
+                    "Hospitalization",
+                    "Day care",
+                    "Outpatient",
+                    "Emergency",
+                    "Maternity",
+                    "Dental",
+                    "Vision",
+                    "Other",
+                ],
+            )
+            expense_desc = st.text_area("Expense description", placeholder="Describe the treatment or expense")
+            provider_network = st.radio("Provider network", ["In-network", "Out-of-network", "Unknown"], horizontal=True)
+            service_date = st.text_input("Service date (optional)", placeholder="YYYY-MM-DD")
+            policy_start = st.text_input("Policy start date (optional)", placeholder="YYYY-MM-DD")
+            bill_text = st.text_area("Optional bill text", placeholder="Paste bill text if available")
+            bill_pdf = st.file_uploader("Optional bill PDF", type=["pdf"], key="bill_pdf")
+
+            eligibility_button = st.button("Check Eligibility", type="primary", use_container_width=True)
+            if eligibility_button:
+                extracted_bill_text = bill_text
+                if bill_pdf is not None:
+                    extracted_text, error = _extract_text_from_uploaded_pdf(bill_pdf)
+                    if error:
+                        st.error(f"Failed to read bill PDF: {error}")
+                    else:
+                        extracted_bill_text = (extracted_bill_text + "\n" + extracted_text).strip()
+
+                claim_details = (
+                    f"Claim type: {claim_type}\n"
+                    f"Expense description: {expense_desc or 'Not provided'}\n"
+                    f"Provider network: {provider_network}\n"
+                    f"Service date: {service_date or 'Not provided'}\n"
+                    f"Policy start date: {policy_start or 'Not provided'}"
+                )
+
+                with st.spinner("Evaluating eligibility against policy clauses..."):
+                    decision, sources = _evaluate_claim_eligibility(
+                        st.session_state["vector_store"],
+                        claim_details,
+                        extracted_bill_text,
+                    )
+
+                st.markdown('<div class="content-card">', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Eligibility Result</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="answer-container"><div class="answer-text">{decision}</div></div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                if sources:
+                    st.markdown('<div class="content-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Source References</div>', unsafe_allow_html=True)
+                    for source in sources:
+                        with st.expander(f"{source['id']}: {source['filename']} - Page {source['page']}", expanded=False):
+                            st.markdown("**Document Excerpt:**")
+                            st.write(f"_{source['content_preview']}_")
+                            st.markdown("---")
+                            st.markdown(f"**Reference:** {source['filename']}, Page {source['page']}")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+        with tabs[3]:
+            st.markdown('<div class="section-title">Personalized Recommendations</div>', unsafe_allow_html=True)
+            age = st.number_input("Age", min_value=0, max_value=120, value=30)
+            budget = st.selectbox("Budget range", ["Low", "Medium", "High", "Flexible"])
+            conditions = st.text_area("Conditions", placeholder="List any conditions or needs")
+            care_type = st.multiselect(
+                "Preferred care type",
+                ["Preventive", "Specialist", "Emergency", "Maternity", "Mental health", "Dental", "Vision", "Other"],
+            )
+
+            rec_button = st.button("Generate Recommendations", type="primary", use_container_width=True)
+            if rec_button:
+                profile_text = (
+                    f"Age: {age}\n"
+                    f"Budget: {budget}\n"
+                    f"Conditions: {conditions or 'Not provided'}\n"
+                    f"Preferred care type: {', '.join(care_type) if care_type else 'Not provided'}"
+                )
+
+                with st.spinner("Creating recommendations from policy coverage..."):
+                    recommendations, sources = _generate_recommendations(
+                        st.session_state["vector_store"],
+                        profile_text,
+                    )
+
+                st.markdown('<div class="content-card">', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Recommendations</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="answer-container"><div class="answer-text">{recommendations}</div></div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                if sources:
+                    st.markdown('<div class="content-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Source References</div>', unsafe_allow_html=True)
+                    for source in sources:
+                        with st.expander(f"{source['id']}: {source['filename']} - Page {source['page']}", expanded=False):
+                            st.markdown("**Document Excerpt:**")
+                            st.write(f"_{source['content_preview']}_")
+                            st.markdown("---")
+                            st.markdown(f"**Reference:** {source['filename']}, Page {source['page']}")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # Example questions
     st.markdown('<div class="content-card">', unsafe_allow_html=True)
